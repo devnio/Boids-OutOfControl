@@ -1,176 +1,181 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering.Universal;
 
 public class Boid : MonoBehaviour
 {
-    private Rigidbody2D rb;
-    private float velMagnitude;
+    public Light2D light2D;
 
-    private float rayCastLength;
+    private float sicknessSpeed;
+    private float sickProbability;
+    private bool sick;
+    public bool justGotSick {get; private set;}
 
-    // This list gets filled at every UpdateBoid call
-    private List<Boid> neighbors;
+    private float timeForRecovery;
+    private float timePassedForRecovery;
 
-    public void InitBoid() {
-        rb = this.GetComponent<Rigidbody2D>();
-        this.velMagnitude = 1.0f;
-        this.rayCastLength = 2.0f;
+    public Vector3 velocity {get; private set;}
 
+
+    private void Update() {
+        if (!sick)
+        {
+            this.sickProbability += Time.deltaTime * sicknessSpeed;
+
+            float r = Random.Range(0f, 1f);
+            if (r < this.sickProbability)
+            {
+                this.sick = true;
+            }
+            this.light2D.color = Color.Lerp(Color.blue, Color.yellow, this.sickProbability);
+        }
+        else
+        {
+            timePassedForRecovery += Time.deltaTime;
+            if (timePassedForRecovery > timeForRecovery)
+            {
+                this.sick = false; 
+                ResetSicknesProbability();
+            }
+            this.light2D.color = Color.red;
+        }
+
+    }
+
+    // Used by nearby boids
+    public void PushSicknessProbability(float value)
+    {
+        this.sickProbability += value * Time.deltaTime;
+    }
+
+    public void ResetSicknesProbability()
+    {
+        this.sickProbability = 0f;
+        this.justGotSick = false;
+    } 
+
+    public void ResetVelocity()
+    {
+        this.velocity = Vector3.zero;
+    }
+
+    public void InitBoid(float maxSpeed, float sicknessSpeed, float recoveryTime) {
+        this.timeForRecovery = recoveryTime;
+        this.sicknessSpeed = sicknessSpeed;
         this.transform.rotation = Quaternion.Euler(0, 0, Random.Range(0f, 360f));
-        this.rb.velocity = this.transform.rotation * Vector3.right * velMagnitude;
-
-        this.neighbors = new List<Boid>();
+        this.velocity = this.transform.rotation * Vector3.right * maxSpeed;
     }
 
-    /// <summary>
-    /// Update boid using the 3 rules:
-    /// - Separation
-    /// - Alignment
-    /// - Cohesion
-    /// </summary>
-    /// <param name="boids"> List of all boids in the scene.</param>
-    /// <param name="T"> Threshold determining neighborhood distance. </param>
-    public void UpdateBoid(List<Boid> boids, float T)
+    public void CheckBounds(Vector3 worldExtents)
     {
-        // Get neighboors
-        foreach(Boid b in boids)
+        Vector3 pos = this.transform.position;
+
+        if (this.transform.position.x < worldExtents.x)
         {
-            float dist = Vector3.Magnitude(b.transform.position - this.transform.position);
-            if (dist < T && dist > Mathf.Epsilon)
-            {
-                neighbors.Add(b);
-            }
+            pos.x = -worldExtents.x-0.1f;
         }
-
-        // ==============
-        // Obstacles
-        // ==============
-        Vector3 acceleration = Vector3.zero;
-        Vector3 avoidObstaclesVel = AvoidObstaclesDir() * 2.5f;
-        acceleration += avoidObstaclesVel;
-
-        // TODO: this makes the boids stick to the edges
-        // If no neighbors then no need to go through rules, just avoid obstacles
-        if (neighbors.Count == 0) //|| Vector3.Magnitude(obstaclesForce) > 3f 
+        if (this.transform.position.x > -worldExtents.x)
         {
-            Steer(acceleration);
-            return;
+            pos.x = worldExtents.x+0.1f;
         }
-
-        // ============================
-        // 3 RULES
-        // ============================
-        // =====================
-        // Alignment - direction
-        // =====================
-        Vector3 tempAccumulator = Vector3.zero;
-        foreach(Boid b in neighbors)
+        if (this.transform.position.y < worldExtents.y)
         {
-            float dist = Vector3.Magnitude(this.transform.position - b.transform.position);
-            Vector3 rb_vel = b.rb.velocity.normalized / dist;
-            tempAccumulator += rb_vel;
-
-            // Vector3 rb_vel = b.rb.velocity;
-            // tempAccumulator += rb_vel;
+            pos.y = -worldExtents.y-0.1f;
         }
-        acceleration += tempAccumulator / boids.Count * 1.0f;
-
-        // =====================
-        // Separation
-        // ===================== 
-        foreach(Boid b in neighbors)
+        if (this.transform.position.y > -worldExtents.y)
         {
-            Vector3 dir = this.transform.position - b.transform.position;
-            float dist = Vector3.Magnitude(dir); 
-            // Weight the normalized dir by distance (effectively not using sqrt when normalizing -> can be optimized)
-            tempAccumulator += dir.normalized / dist;   
+            pos.y = worldExtents.y+0.1f;
         }
-        acceleration += tempAccumulator * 0.75f;
-
-        // =====================
-        // Cohesion 
-        // =====================
-        Vector3 centroid = Vector3.zero;
-        foreach(Boid b in neighbors)
-        {
-            centroid += b.transform.position;
-        }
-        centroid /= neighbors.Count;
-        acceleration += (centroid - this.transform.position) * 0.4f;
-
-        // =====================
-        // Apply
-        // =====================
-        Steer(acceleration);
-        this.neighbors.Clear();
+        this.transform.position = pos;
     }
 
-    public Vector3 AvoidObstaclesDir()
+    public Vector3 AvoidObstaclesDir(Vector3 healingCirclePos)
     {
-        float angleStep = 180f/5;
-        float rotateAngle = 0f;
-        Vector3 prevDir = Vector3.zero;
-        
-        // define state [collided first or not]
-        int firstIteration = 0;
-
-        float minCollDist = Mathf.Infinity;
-
-        for (int i = 0; i < 6; i++)
-        { 
-            Vector3 rayDir = this.transform.TransformDirection(Quaternion.Euler(0, 0, rotateAngle) * Vector3.up);
-            RaycastHit2D hit = Physics2D.Raycast(this.transform.position, rayDir, rayCastLength);
-
-            if (hit.collider != null && !hit.collider.CompareTag("Boid"))
-            {
-                Debug.DrawRay(this.transform.position, rayDir * hit.distance, Color.red, Time.deltaTime);
-             
-                minCollDist = Mathf.Min(minCollDist, hit.distance);
-             
-                if (firstIteration == 0) firstIteration = 1;
-                if (firstIteration == 2)
-                {
-                    Debug.Log("Return left");
-                    return prevDir / (rayCastLength - minCollDist);
-                }
-            }
-            else
-            {
-                Debug.DrawRay(this.transform.position, rayDir * rayCastLength, Color.green, Time.deltaTime);
-                if (firstIteration == 0) firstIteration = 2;
-                if (firstIteration == 1)
-                {
-                    Debug.Log("Return right");
-                    return rayDir / (rayCastLength - minCollDist);
-                }
-            }
-
-            prevDir = rayDir;
-            rotateAngle -= angleStep; 
-        }
-
-        // if all collided (no return until this point & firstIteration=1) go in opposite direction
-        if (firstIteration == 1)
+        Vector3 dir = this.transform.position - healingCirclePos;
+        float dist = Vector3.Magnitude(dir);
+        if (dist < 3f && dist > 1.25f)
         {
-            Debug.Log("All collided return");
-            Debug.DrawRay(this.transform.position, Quaternion.Euler(0, 0, 180f) * this.rb.velocity, Color.blue, 1f);
-            return Quaternion.Euler(0, 0, 180f) * this.rb.velocity / (rayCastLength - minCollDist);
+            return dir;
         }
         
-        // if none collided then return (0,0,0)
-        return Vector3.zero;
+        // if none collided then return same velocity vector
+        return this.velocity;
     }
 
-    /// <summary>
-    /// Change angle based on input. Angle 0 points right.
-    /// </summary>
-    /// <param name="angle"></param>
-    public void Steer(Vector3 vel) {
-        Vector3 rb_vel = this.rb.velocity;
-        this.rb.velocity = Vector3.ClampMagnitude(rb_vel + vel, 3f);
+    public Vector3 Steer(Vector3 desired, float maxForce)
+    {
+        Vector3 steer = desired - this.velocity;
+        steer = Vector3.ClampMagnitude(steer, maxForce);
 
-        this.transform.rotation = Quaternion.Euler(0, 0, Mathf.Rad2Deg * Mathf.Atan2(this.rb.velocity.y, this.rb.velocity.x));
+        return steer;
     }
 
+    public void ApplyAcceleration(Vector3 alignment, float wAlignment, Vector3 separation, float wSeparation, 
+                                  Vector3 cohesion, float wCohesion, Vector3 avoidObstacle, float wAvoidObst, float maxSpeed)
+    {
+        // Accelerate
+        Vector3 acceleration = alignment * wAlignment + separation * wSeparation + cohesion * wCohesion + avoidObstacle * wAvoidObst;
+        this.velocity = Vector3.ClampMagnitude(this.velocity + acceleration, maxSpeed);
+
+        // Update rotation
+        this.transform.rotation = Quaternion.Euler(0, 0, Mathf.Rad2Deg * Mathf.Atan2(this.velocity.y, this.velocity.x));
+    }
+
+
+    // public Vector3 AvoidObstaclesDir(float rayCastLength)
+    // {
+    //     float angleStep = 180f/5;
+    //     float rotateAngle = 0f;
+    //     Vector3 prevDir = Vector3.zero;
+        
+    //     // define state [collided first or not]
+    //     int firstIteration = 0;
+
+    //     float minCollDist = Mathf.Infinity;
+
+    //     for (int i = 0; i < 6; i++)
+    //     { 
+    //         Vector3 rayDir = this.transform.TransformDirection(Quaternion.Euler(0, 0, rotateAngle) * Vector3.up);
+    //         RaycastHit2D hit = Physics2D.Raycast(this.transform.position, rayDir, rayCastLength);
+
+    //         if (hit.collider != null && !hit.collider.CompareTag("Boid"))
+    //         {
+    //             Debug.DrawRay(this.transform.position, rayDir * hit.distance, Color.red, Time.deltaTime);
+             
+    //             minCollDist = Mathf.Min(minCollDist, hit.distance);
+             
+    //             if (firstIteration == 0) firstIteration = 1;
+    //             if (firstIteration == 2)
+    //             {
+    //                 Debug.Log("Return left");
+    //                 return prevDir; // / (rayCastLength - minCollDist);
+    //             }
+    //         }
+    //         else
+    //         {
+    //             Debug.DrawRay(this.transform.position, rayDir * rayCastLength, Color.green, Time.deltaTime);
+    //             if (firstIteration == 0) firstIteration = 2;
+    //             if (firstIteration == 1)
+    //             {
+    //                 Debug.Log("Return right");
+    //                 return rayDir; // / (rayCastLength - minCollDist);
+    //             }
+    //         }
+
+    //         prevDir = rayDir;
+    //         rotateAngle -= angleStep; 
+    //     }
+
+    //     // if all collided (no return until this point & firstIteration=1) go in opposite direction
+    //     if (firstIteration == 1)
+    //     {
+    //         Debug.Log("All collided return");
+    //         Debug.DrawRay(this.transform.position, Quaternion.Euler(0, 0, 180f) * this.velocity, Color.blue, 1f);
+    //         return Quaternion.Euler(0, 0, 180f) * this.velocity; // / (rayCastLength - minCollDist);
+    //     }
+        
+    //     // if none collided then return same velocity vector
+    //     return this.velocity;
+    // }
 }
