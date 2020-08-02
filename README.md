@@ -1,5 +1,6 @@
 # Boids - OutOfControl
 This project has been realised for the GMTK Game Jam 2020.
+![Gameplay](Assets/2.jpg)
 
 # Rules
 Complete a game in less than 24h adhering to the theme - out of control.
@@ -7,6 +8,7 @@ Complete a game in less than 24h adhering to the theme - out of control.
 # Game Idea
 This game is a boids simulation. During gameplay you receive cash that you can spend to distance the entities to avoid spreading an infection. 
 Alternatively you can spend money to isolate some entities for a certain amount of time until they heal.
+![Gameplay](Assets/1.jpg)
 
 # Final
 I started later and worked partially on this project, so this was made in less than 24h probably.
